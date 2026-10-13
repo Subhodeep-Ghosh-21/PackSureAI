@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:google_mlkit_translation/google_mlkit_translation.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
@@ -45,6 +46,7 @@ class PackSureHome extends StatefulWidget {
 
 class _PackSureHomeState extends State<PackSureHome> {
   final _tts = FlutterTts();
+  OnDeviceTranslator? _translator;
   final _picker = ImagePicker();
   final _speech = stt.SpeechToText();
   final _recognizer = TextRecognizer(script: TextRecognitionScript.latin);
@@ -85,10 +87,36 @@ class _PackSureHomeState extends State<PackSureHome> {
     await _tts.setPitch(1.0);
   }
 
+
   Future<void> _say(String text) async {
     if (!_ttsOn) return;
+
     await _tts.stop();
-    await _tts.speak(text);
+
+    try {
+      String translatedText = text;
+
+      if (_language != 'English') {
+        final targetLanguage = _language == 'Bengali'
+            ? TranslateLanguage.bengali
+            : TranslateLanguage.hindi;
+
+        await _translator?.close();
+
+        _translator = OnDeviceTranslator(
+          sourceLanguage: TranslateLanguage.english,
+          targetLanguage: targetLanguage,
+        );
+
+        translatedText = await _translator!.translateText(text);
+      }
+
+      await _configureTts();
+      await _tts.speak(translatedText);
+    } catch (e) {
+      // If translation fails, speak the original text.
+      await _tts.speak(text);
+    }
   }
 
   Future<void> _initSpeech() async {
@@ -290,7 +318,13 @@ class _PackSureHomeState extends State<PackSureHome> {
     ]));
 
   @override
-  void dispose() { _recognizer.close(); _tts.stop(); _speech.stop(); super.dispose(); }
+  void dispose() {
+    _recognizer.close();
+    _translator?.close();
+    _tts.stop();
+    _speech.stop();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
