@@ -1,3 +1,4 @@
+import 'barcode_scanner_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -50,14 +51,38 @@ class _PackSureHomeState extends State<PackSureHome> {
   final _picker = ImagePicker();
   final _speech = stt.SpeechToText();
   final _recognizer = TextRecognizer(script: TextRecognitionScript.latin);
-  bool _busy = false, _ttsOn = true, _voiceOn = true, _speechReady = false;
-  String _language = 'English', _locale = 'en-US', _status = 'Ready to scan a packaged product.';
+  bool _busy = false,
+      _ttsOn = true,
+      _voiceOn = true,
+      _speechReady = false,
+      _isSpeaking = false;
+  String _language = 'English',
+      _locale = 'en-US',
+      _status = 'Ready to scan a packaged product.';
   ScanResult? _result;
+  String _lastSpokenText = '';
   final List<ScanResult> _history = [];
 
   @override
   void initState() {
     super.initState();
+    _tts.setStartHandler(() {
+      if (mounted) {
+        setState(() => _isSpeaking = true);
+      }
+    });
+
+    _tts.setCompletionHandler(() {
+      if (mounted) {
+        setState(() => _isSpeaking = false);
+      }
+    });
+
+    _tts.setCancelHandler(() {
+      if (mounted) {
+        setState(() => _isSpeaking = false);
+      }
+    });
     _loadPrefs();
     _initSpeech();
     _configureTts();
@@ -87,11 +112,16 @@ class _PackSureHomeState extends State<PackSureHome> {
     await _tts.setPitch(1.0);
   }
 
-
   Future<void> _say(String text) async {
     if (!_ttsOn) return;
 
     await _tts.stop();
+
+    _lastSpokenText = text;
+
+    if (mounted) {
+      setState(() => _isSpeaking = false);
+    }
 
     try {
       String translatedText = text;
@@ -112,12 +142,33 @@ class _PackSureHomeState extends State<PackSureHome> {
       }
 
       await _configureTts();
+
       await _tts.speak(translatedText);
     } catch (e) {
-      // If translation fails, speak the original text.
       await _tts.speak(text);
     }
   }
+
+  Future<void> _stopTalking() async {
+    await _tts.stop();
+
+    if (mounted) {
+      setState(() => _isSpeaking = false);
+    }
+  }
+
+  Future<void> _toggleTalking() async {
+    if (_isSpeaking) {
+      await _stopTalking();
+    } else if (_result != null) {
+      await _say(_result!.spoken);
+    } else if (_lastSpokenText.isNotEmpty) {
+      await _say(_lastSpokenText);
+    } else {
+      await _say('Ready to scan a packaged product.');
+    }
+  }
+
 
   Future<void> _initSpeech() async {
     try {
@@ -216,6 +267,17 @@ class _PackSureHomeState extends State<PackSureHome> {
       found: found, missing: missing);
   }
 
+  Future<void> _openBarcodeScanner() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (context) => BarcodeScannerScreen(
+          language: _language,
+          speak: _say,
+        ),
+      ),
+    );
+  }
 
   Future<void> _voiceCommand() async {
     if (!_voiceOn) {
@@ -330,9 +392,14 @@ class _PackSureHomeState extends State<PackSureHome> {
   Widget build(BuildContext context) {
     final r = _result;
     return Scaffold(appBar: AppBar(title: const Text('PackSureAI'), actions: [
-      IconButton(tooltip: 'Accessibility settings', onPressed: _showSettings, icon: const Icon(Icons.accessibility_new)),
-      IconButton(tooltip: 'Scan history', onPressed: _showHistory, icon: const Icon(Icons.history)),
-    ]), body: SafeArea(child: ListView(padding: const EdgeInsets.all(18), children: [
+      IconButton(tooltip: 'Accessibility settings',
+          onPressed: _showSettings,
+          icon: const Icon(Icons.accessibility_new)),
+      IconButton(tooltip: 'Scan history',
+          onPressed: _showHistory,
+          icon: const Icon(Icons.history)),
+    ]),
+        body: SafeArea(child: ListView(padding: const EdgeInsets.all(18), children: [
       Semantics(header: true, child: Text('Accessible Product Label Scanner', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold))),
       const SizedBox(height: 8),
       const Text('Scan packaged-product labels, listen to detected information, and review basic screening warnings.', style: TextStyle(fontSize: 16)),
@@ -344,17 +411,45 @@ class _PackSureHomeState extends State<PackSureHome> {
         ])),
       ]))),
       const SizedBox(height: 12),
-      _button('Scan Product with Camera', 'Opens the camera to take a clear photo of the product label.', Icons.camera_alt, _busy ? null : () => _scan(ImageSource.camera), primary: true),
+      _button('Scan Product with Camera',
+          'Opens the camera to take a clear photo of the product label.',
+          Icons.camera_alt, _busy ? null : () => _scan(ImageSource.camera),
+          primary: true),
+          const SizedBox(height: 8),
+      _button('Scan Barcode',
+          'Scan a food product barcode to retrieve available product information.',
+          Icons.qr_code_scanner, _busy ? null : _openBarcodeScanner,
+          ),
       const SizedBox(height: 8),
-      _button('Choose Product Image', 'Select an existing photo of a product label.', Icons.photo_library, _busy ? null : () => _scan(ImageSource.gallery)),
+      _button('Choose Product Image',
+          'Select an existing photo of a product label.',
+          Icons.photo_library, _busy ? null : () => _scan(ImageSource.gallery)),
       const SizedBox(height: 8),
-      _button('Voice Commands', 'Say scan product, repeat, price, quantity, warnings, or help.', Icons.mic, _busy ? null : _voiceCommand),
+      _button('Voice Commands',
+          'Say scan product, repeat, price, quantity, warnings, or help.',
+          Icons.mic, _busy ? null : _voiceCommand),
       const SizedBox(height: 8),
-      _button('Repeat Last Result', 'Speaks the latest scan result again.', Icons.volume_up, r == null ? null : () => _say(r.spoken)),
+      _button(_isSpeaking ? 'Stop Talking' : 'Talk / Read Result',
+            _isSpeaking
+                ? 'Stop the current voice message.'
+                : 'Read the latest scan result or repeat the last voice message.',
+            _isSpeaking ? Icons.stop_circle : Icons.volume_up,
+            _toggleTalking,
+            primary: true,
+          ),
       const SizedBox(height: 8),
-      _button('Scan History', 'Open scans from this app session.', Icons.history, _showHistory),
       const SizedBox(height: 8),
-      _button('Accessibility Settings', 'Change spoken language, text-to-speech, and voice commands.', Icons.accessibility_new, _showSettings),
+      _button('Repeat Last Result',
+          'Speaks the latest scan result again.',
+          Icons.volume_up, r == null ? null : () => _say(r.spoken)),
+      const SizedBox(height: 8),
+      _button('Scan History',
+          'Open scans from this app session.',
+          Icons.history, _showHistory),
+      const SizedBox(height: 8),
+      _button('Accessibility Settings',
+          'Change spoken language, text-to-speech, and voice commands.',
+          Icons.accessibility_new, _showSettings),
       if (_busy) ...[const SizedBox(height: 16), const Center(child: CircularProgressIndicator(semanticsLabel: 'Processing product image')), const Center(child: Text('Please wait while the image is processed.'))],
       if (r != null) ...[
         const SizedBox(height: 22), Semantics(header: true, child: Text('Scan Result', style: Theme.of(context).textTheme.headlineSmall)),
